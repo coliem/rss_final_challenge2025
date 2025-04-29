@@ -41,8 +41,8 @@ class PathPlan(Node):
             1)
 
         self.goal_sub = self.create_subscription(
-            PoseStamped,
-            "/goal_pose",
+            PoseArray,
+            "/shrinkray_part",
             self.goal_cb,
             10
         )
@@ -76,11 +76,14 @@ class PathPlan(Node):
         self.rotation_matrix = np.eye(2)
         self.rotation_matrix_inv = np.eye(2)
 
-        self.robot_radius = 0.25
+        self.robot_radius = 1.0
         self.turning_radius = 1.0
 
         self.current_pose = None
-        self.goal_pose = None
+        self.banana1 = None
+        self.banana2 = None
+
+        self.visualize_search = True
 
     def map_cb(self, msg):
         self.map_info = msg.info
@@ -102,19 +105,6 @@ class PathPlan(Node):
 
         _, _, self.yaw = euler_from_quaternion(q) # quaternion to yaw
 
-        # x_t, y_t = self.map_origin[0], self.map_origin[1]
-        # self.rotation_matrix = np.array([
-        #     [np.cos(self.yaw), -np.sin(self.yaw), x_t],
-        #     [np.sin(self.yaw), np.cos(self.yaw), y_t],
-        #     [0, 0, 1]
-        # ])
-
-        # self.rotation_matrix_inv = np.array([
-        #     [np.cos(self.yaw), np.sin(self.yaw), x_t * np.cos(self.yaw) + y_t * np.sin(self.yaw)],
-        #     [-np.sin(self.yaw), np.cos(self.yaw), -x_t * np.sin(self.yaw + y_t * np.cos(self.yaw))],
-        #     [0, 0, 1]
-        # ])
-
         self.rotation_matrix = np.array([
             [np.cos(self.yaw), -np.sin(self.yaw)],
             [np.sin(self.yaw), np.cos(self.yaw)],
@@ -134,13 +124,29 @@ class PathPlan(Node):
         self.current_pose = (pose.pose.pose.position.x, pose.pose.pose.position.y) # extract x,y
         self.get_logger().info(f"Initialized current pose {self.current_pose}, px {self.convert_world_to_pixel(self.current_pose)}")
 
-        if self.current_pose is not None and self.goal_pose is not None and self.map_data is not None:
-            self.plan_path(self.current_pose, self.goal_pose, self.map_data)
+        if self.current_pose is not None and self.banana1 is not None and self.banana2 is not None and self.map_data is not None:
+
+            dist_to_banana1 = self.euclidean_distance(self.current_pose, self.banana1)
+            dist_to_banana2 = self.euclidean_distance(self.current_pose, self.banana2)
+
+            if dist_to_banana1 < dist_to_banana2:
+                self.plan_path(self.current_pose, self.banana1, self.map_data)
+                self.plan_path(self.banana1, self.banana2, self.map_data)
+            else:
+                self.plan_path(self.current_pose, self.banana2, self.map_data)
+                self.plan_path(self.banana2, self.banana1, self.map_data)
 
     def goal_cb(self, msg):
         # we don't need to run search on orientation
-        self.goal_pose = (msg.pose.position.x, msg.pose.position.y)
-        self.get_logger().info(f"Initialized goal pose {self.goal_pose}, px {self.convert_world_to_pixel(self.goal_pose)}")
+        banana_locations = msg.poses
+        if not banana_locations:
+            self.get_logger().info("No banana locations received...")
+
+        self.banana1 = (banana_locations[0].position.x, banana_locations[0].position.y)
+        self.get_logger().info(f"Initialized banana 1 {self.banana1}, px {self.convert_world_to_pixel(self.banana1)}")
+
+        self.banana2 = (banana_locations[1].position.x, banana_locations[1].position.y)
+        self.get_logger().info(f"Initialized banana 2 {self.banana2}, px {self.convert_world_to_pixel(self.banana2)}")
 
     def plan_path(self, start_point, end_point, map):
         self.get_logger().info("Path planning started")
@@ -150,8 +156,9 @@ class PathPlan(Node):
         goal_px = self.convert_world_to_pixel(end_point)
         self.get_logger().info(f"Start pixel: {start_px}, Goal pixel: {goal_px}")
 
-        visited_points = PoseArray()
-        visited_points.header.frame_id = "map"
+        if self.visualize_search:
+            visited_points = PoseArray()
+            visited_points.header.frame_id = "map"
 
         # Remember start_px and goal_px are (u,v) format but we index map_data as (v,u)
         def get_neighbors(node):
@@ -173,10 +180,6 @@ class PathPlan(Node):
             # manhattan distance for heuristic
             return np.abs(a[0] - b[0]) + np.abs(a[1] - b[1])
 
-        def euclidean_distance(a, b):
-            # euclidean distance for cost
-            return np.sqrt((a[0] - b[0])**2 + (a[1] - b[1])**2)
-
         open_set = []
         heapq.heapify(open_set)
         came_from = {}
@@ -189,16 +192,18 @@ class PathPlan(Node):
             _, current_g, current = heappop(open_set)
             self.get_logger().info(f"On node {current}")
 
-            # # Add the current node to visited points
-            # world_coords = self.convert_pixel_to_world(current)
-            # pose = Pose()
-            # pose.position.x = world_coords[0]
-            # pose.position.y = world_coords[1]
-            # pose.position.z = 0.0
-            # visited_points.poses.append(pose)
+            if self.visualize_search:
+                # Add the current node to visited points
+                world_coords = self.convert_pixel_to_world(current)
+                pose = Pose()
+                pose.position.x = world_coords[0]
+                pose.position.y = world_coords[1]
+                pose.position.z = 0.0
+                visited_points.poses.append(pose)
 
-            # # Publish visited points
-            # self.visited_points_pub.publish(visited_points)
+                # Publish visited points
+                self.visited_points_pub.publish(visited_points)
+
             if current == goal_px:
                 self.get_logger().info("Goal reached")
                 path = self.reconstruct_path(came_from, goal_px)
@@ -212,17 +217,18 @@ class PathPlan(Node):
                     # self.get_logger().info(f"{self.map_data[v,u]}")
                     continue
 
-                tentative_g_score = current_g + euclidean_distance(current, neighbor)
+                tentative_g_score = current_g + self.euclidean_distance(current, neighbor)
 
                 if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
                     g_score[neighbor] = tentative_g_score
-                    f_score = tentative_g_score + euclidean_distance(neighbor, goal_px)
+                    f_score = tentative_g_score + heuristic(neighbor, goal_px) # change between euclidean & heuristic
                     heapq.heappush(open_set, (f_score, tentative_g_score, neighbor))
                     came_from[neighbor] = current
 
         if path:
             for point in path:
                 self.trajectory.addPoint(point)
+
             self.traj_pub.publish(self.trajectory.toPoseArray())
             self.trajectory.publish_viz()
             self.get_logger().info("Path planned successfully")
@@ -255,9 +261,6 @@ class PathPlan(Node):
         self.map_data = scaled_map
 
     def convert_pixel_to_world(self, pixel):
-        # pixel_coords = np.array([pixel[0], pixel[1], 1.0])
-        # map_coords = np.dot(self.rotation_matrix_inv, pixel_coords) * self.map_resolution
-        # return map_coords[0], map_coords[1]
         pixel_coords = np.array([pixel[0], pixel[1]])
         map_coords = np.dot(self.rotation_matrix_inv, pixel_coords) * self.map_resolution
         map_x = map_coords[0] + self.map_origin[0]
@@ -265,9 +268,6 @@ class PathPlan(Node):
         return map_x, map_y
 
     def convert_world_to_pixel(self, point):
-        # map_coords = np.array([point[0]/self.map_resolution, point[1]/self.map_resolution, 1.0])
-        # pixel_coords = np.dot(self.rotation_matrix, map_coords)
-        # return int(pixel_coords[0]), int(pixel_coords[1])
         map_x, map_y = point
         map_coords = np.array([map_x - self.map_origin[0], map_y - self.map_origin[1]])
         pixel_coords = np.dot(self.rotation_matrix, map_coords) / self.map_resolution
@@ -275,24 +275,9 @@ class PathPlan(Node):
         pixel_y = int(pixel_coords[1])
         return pixel_x, pixel_y
 
-        # # origin map
-        # u, v = pixel
-        # out = self.map_resolution * (self.t_map_to_world @ (np.array([u,v,1]).reshape(3,-1)))
-
-        # return out[0], out[1]
-
-    # def convert_map_to_pixel(self, point):
-        # x, y = point
-        # homogeneous_point = np.array([x, y, 1]).reshape(3, 1)
-        # transformed_point = self.t_world_to_map @ homogeneous_point
-        # pixel_u = transformed_point[0, 0] / self.map_resolution
-        # pixel_v = transformed_point[1, 0] / self.map_resolution
-        # self.get_logger().info(f"transfomr: {self.t_world_to_map.shape}")
-        # self.get_logger().info(f"transfomred {transformed_point}")
-
-        # return int(pixel_u), int(pixel_v)
-
-
+    def euclidean_distance(self, a, b):
+        # euclidean distance for cost
+        return np.sqrt((a[0] - b[0])**2 + (a[1] - b[1])**2)
 
 def main(args=None):
     rclpy.init(args=args)
