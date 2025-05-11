@@ -1,0 +1,43 @@
+<launch>
+    <node pkg="heist_controller" exec="heist_state" name="heist_state" output="screen">
+        <param name="full_run" value="true" />
+    </node>
+    <node pkg="heist_controller" exec="backup_controller" name="backup_controller" output="screen">
+        <param name="drive_topic" value = "/vesc/high_level/input/nav_0"/>
+        <param name = "odom_topic" value = "/pf/pose/odom"/>
+    </node>
+    <node pkg="path_planning" exec="trajectory_planner" name="trajectory_planner" output="screen">
+        <param from="$(find-pkg-share path_planning)/config/real/config.yaml"/>
+        <param name="full_run" value="true" />
+    </node>
+    <node pkg="path_planning" exec="trajectory_follower" name="trajectory_follower">
+        <param from="$(find-pkg-share path_planning)/config/real/config.yaml"/>
+        <param name="full_run" value="true" />
+    </node>
+    <node pkg="localization" exec="particle_filter" name="particle_filter" output="screen">
+        <param from="$(find-pkg-share path_planning)/config/real/pf_config.yaml"/>
+        <!-- <param name="full_run" value="true" /> -->
+    </node>
+    <node pkg="visual_servoing" name="red_stop" exec="red_stop" output="screen">
+        <param name="drive_topic" value="/vesc/low_level/input/safety" />
+    </node>
+    <node pkg="heist_controller" exec="safety" name="safety">
+        <param name="cmd_topic" value="/vesc/low_level/ackermann_cmd" />
+        <param name="laser_topic" value="/scan" />
+        <param name="drive_topic" value="/vesc/low_level/input/safety" />
+    </node>
+  <node pkg="visual_servoing" name="banana_detector" exec="banana_detector" output="screen">
+  	<param name="drive_topic" value="/vesc/high_level/input/nav_0" />
+    <param name="full_run" value="true" />
+  </node>
+   <node pkg="visual_servoing" name="parking_controller" exec="parking_controller" output="screen">
+  </node>
+
+  <node pkg="visual_servoing" name="homography_transformer" exec="homography_transformer" output="screen">
+  </node>
+
+  <node pkg="image_transport" name="republish" exec="republish" args="raw in:=/cone_debug_img out:=/cone_debug_img_compressed" output="screen">
+  </node>
+
+   <node pkg = "path_planning" exec = "basement_point_publisher" name = "basement_point_publisher" output = "screen"></node>
+</launch>

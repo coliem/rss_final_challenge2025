@@ -1,0 +1,19 @@
+<launch>
+  <node pkg="heist_controller" exec="safety" name="safety">
+    <param name="cmd_topic" value="/vesc/low_level/ackermann_cmd" />
+    <param name="laser_topic" value="/scan" />
+    <param name="drive_topic" value="/vesc/low_level/input/safety" />
+  </node>
+
+  <!-- Uncomment for the robot TODO NOT UPDATED -->
+  <!-- <node pkg="safety_controller" exec="safety_controller" name="safety_controller">
+    <param name="cmd_topic" value="/drive" />
+    <param name="laser_topic" value="/scan" />
+    <param name="drive_topic" value="/drive" />
+  </node> -->
+
+    <node pkg="heist_controller" exec="test_safety" name="test_safety">
+    <param name="drive_topic" value="/vesc/high_level/input/nav_0" />
+    <param name="velocity" value="0.5" />
+  </node>
+</launch>

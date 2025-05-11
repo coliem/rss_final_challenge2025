@@ -1,0 +1,10 @@
+<launch>
+  <node pkg="visual_servoing" exec="red_stop" name="red_stop">
+    <param name="drive_topic" value="/vesc/low_level/input/safety" />
+  </node>
+
+  <node pkg="heist_controller" exec="test_safety" name="test_safety">
+    <param name="drive_topic" value="/vesc/high_level/input/nav_0" />
+    <param name="velocity" value="0.5" />
+  </node>
+</launch>

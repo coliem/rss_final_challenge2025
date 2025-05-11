@@ -26,9 +26,10 @@ setup(
     entry_points={
         'console_scripts': [
             'parking_controller = visual_servoing.parking_controller:main',
-            'cone_detector = visual_servoing.cone_detector:main',
+            'banana_detector = visual_servoing.banana_detector:main',
             'cone_sim_marker = visual_servoing.cone_sim_marker:main',
             'homography_transformer = visual_servoing.homography_transformer:main',
+            'red_stop = visual_servoing.red_light.red_stop:main',
         ],
     },
 )

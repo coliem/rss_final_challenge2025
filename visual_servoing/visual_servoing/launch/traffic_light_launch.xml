@@ -1,0 +1,7 @@
+<launch>
+
+  <node pkg="visual_servoing" name="red_stop" exec="red_stop" output="screen">
+    <param name="drive_topic" value="/vesc/low_level/input/safety" />
+  </node>
+
+</launch>

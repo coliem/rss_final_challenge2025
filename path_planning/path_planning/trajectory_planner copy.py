@@ -9,7 +9,6 @@ from heist_msgs.msg import HeistState
 from .utils import LineTrajectory
 from std_msgs.msg import Int32
 import numpy as np
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 # from skimage.morphology import disk, dilation
 
 from tf_transformations import euler_from_quaternion
@@ -19,18 +18,7 @@ from geometry_msgs.msg import Pose
 import cv2
 
 from heapq import heappop, heappush
-from enum import Enum
 
-class State(Enum):
-    FOLLOW = 1
-    PARK = 2
-    CORRECT = 3
-    END = 4
-
-class Obj(Enum):
-    BANANA_A = 1
-    BANANA_B = 2
-    HOME = 3
 
 class PathPlan(Node):
     """ Listens for goal pose published by RViz and uses it to plan a path from
@@ -39,21 +27,12 @@ class PathPlan(Node):
 
     def __init__(self):
         super().__init__("trajectory_planner")
-        qos_profile = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10
-        )
         self.declare_parameter('odom_topic', "default")
         self.declare_parameter('map_topic', "default")
         self.declare_parameter('initial_pose_topic', "default")
-        self.declare_parameter('full_run', True)
 
         self.state_pub = self.create_publisher(Int32, "/change_info", 1)
         self.state_sub = self.create_subscription(HeistState, "/heist_state", self.state_callback, 1)
-        self.traj_done_sub = self.create_subscription(Int32, "/traj_done", self.traj_done_callback, 1)
-        self.full_run = self.get_parameter('full_run').get_parameter_value().bool_value
 
         self.odom_topic = self.get_parameter('odom_topic').get_parameter_value().string_value
         self.map_topic = self.get_parameter('map_topic').get_parameter_value().string_value
@@ -66,8 +45,8 @@ class PathPlan(Node):
             1)
 
         self.goal_sub = self.create_subscription(
-            PoseStamped,
-            "/goal_pose",
+            PoseArray,
+            "/shrinkray_part",
             self.goal_cb,
             10
         )
@@ -85,11 +64,11 @@ class PathPlan(Node):
             10
         )
 
-        # self.visited_points_pub = self.create_publisher(
-        #     PoseArray,
-        #     "/trajectory/visited_points",
-        #     10
-        # )
+        self.visited_points_pub = self.create_publisher(
+            PoseArray,
+            "/trajectory/visited_points",
+            10
+        )
 
         self.trajectory = LineTrajectory(node=self, viz_namespace="/planned_trajectory")
         self.map_data = None
@@ -100,73 +79,17 @@ class PathPlan(Node):
         self.map_origin = (0.0, 0.0)
         self.rotation_matrix = np.eye(2)
         self.rotation_matrix_inv = np.eye(2)
-        self.safety_cost_map = None
 
-        self.robot_radius = 0.75 #0.75
+        self.robot_radius = 0.75
         self.turning_radius = 1.0
 
         self.current_pose = None
-        self.known = [
-                      (-5.0902533531188965, 25.827289581298828),
-                      (-20.872953414916992, 25.27769660949707),
-                      (-19.75933265686035, 32.785926818847656),
-                      (-27.922807693481445, 33.37120819091797),
-                      ]
-        self.home = (-19.83066177368164, 1.331664800643921)
-        self.intermediate = (-5.411397933959961, 25.39836883544922)
-
-        self.goal1 = None
-
         self.banana1 = None
         self.banana2 = None
-        self.path_initialized = False
 
-        self.visualize_search = False
-        self.valid_state = False
-        self.prev_state = None
-
-        self.parts = []
-        self.parts_index = 0
-
-    def traj_done_callback(self, traj_done_msg):
-        if traj_done_msg.data == 1:
-            self.path_initialized = False
-            self.parts_index += 1
-
-        if self.parts_index >= (len(self.parts) - 1):
-            msg = Int32()
-            msg.data = State.FOLLOW.value
-            self.state_pub.publish(msg)
-        else:
-            self.plan_path(self.parts[self.parts_index], self.parts[self.parts_index+1], self.map_data)
-            self.path_initialized = True
+        self.visualize_search = True
+    def state_callback(self, msg):
         pass
-
-    def state_callback(self, statemsg):
-        # self.get_logger().info(f"Entered state_callback w {statemsg.state}, {statemsg.objective}")
-        if not self.path_initialized and statemsg.state == State.FOLLOW.value and self.banana1 is not None and self.banana2 is not None:
-            self.get_logger().info(f"entered")
-            if statemsg.objective == Obj.BANANA_A.value:
-                self.get_logger().info(f"Initialized current pose {0}, px {0}")
-                if self.banana1 == 0:
-                    self.parts = [self.home, self.known[self.banana1]]
-                else:
-                    self.parts = [self.home, self.intermediate, self.known[self.banana1]]
-            elif statemsg.objective == Obj.BANANA_B.value:
-                self.trajectory.clear()
-                self.get_logger().info(f"Initialized current pose {0}, px {0}")
-                self.parts = [self.known[self.banana1], self.known[self.banana2]]
-            elif statemsg.objective == Obj.HOME.value:
-                self.get_logger().info(f"Initialized current pose {0}, px {0}")
-                self.parts = [self.known[self.banana2], self.home]
-            else:
-                return
-            self.parts_index = 0
-            self.path_initialized = True
-            self.plan_path(self.parts[0], self.parts[1], self.map_data)
-        self.prev_state = statemsg.state
-        if statemsg.state != State.FOLLOW.value:
-            self.path_initialized = False
 
     def map_cb(self, msg):
         self.map_info = msg.info
@@ -174,8 +97,6 @@ class PathPlan(Node):
         self.map_width = msg.info.width
         self.map_resolution = msg.info.resolution
         self.map_origin = (msg.info.origin.position.x, msg.info.origin.position.y)
-        self.get_logger().info("Map received")
-
 
         # occupancy grid has values 0 for free space and -1 for unknown
         self.map_data = np.array(msg.data).astype(np.int8).reshape(msg.info.height, msg.info.width)
@@ -201,12 +122,10 @@ class PathPlan(Node):
         ])
 
         self.dilate_map(self.robot_radius)
-        self.calculate_safety_cost_map(maxdist = 500)
 
         self.get_logger().info("Initialized map")
 
     def pose_cb(self, pose):
-        # pass
         # we don't need to run search on orientation
         self.current_pose = (pose.pose.pose.position.x, pose.pose.pose.position.y) # extract x,y
         self.get_logger().info(f"Initialized current pose {self.current_pose}, px {self.convert_world_to_pixel(self.current_pose)}")
@@ -226,44 +145,17 @@ class PathPlan(Node):
         #         self.plan_path(self.banana2, self.banana1, self.map_data)
         #         self.plan_path(self.banana1, self.current_pose, self.map_data)
 
-    def get_closest(self, px):
-        smallest_dist = 10000000000000000000
-        best_i = 0
-        for i, pt in enumerate(self.known):
-            dist = ((pt[0]-px[0])**2 + (pt[1]-px[1])**2) ** (1/2)
-            if dist < smallest_dist:
-                smallest_dist = dist
-                best_i = i
-        return best_i
-
     def goal_cb(self, msg):
         # we don't need to run search on orientation
-        # banana_locations = msg.poses
-        if self.goal1 == None:
-            self.goal1 = (msg.pose.position.x, msg.pose.position.y)
-        else:
-            px1 = self.goal1
-            px2 = (msg.pose.position.x, msg.pose.position.y)
-            banana1 = self.get_closest(px1)
-            banana2 = self.get_closest(px2)
-            if banana1 < banana2:
-                self.banana1 = banana1
-                self.banana2 = banana2
-            else:
-                self.banana1 = banana2
-                self.banana2 = banana1
-            self.get_logger().info(f"Initialized bananas #{self.banana1} and #{self.banana2}")
-            self.goal1 = None
+        banana_locations = msg.poses
+        if not banana_locations:
+            self.get_logger().info("No banana locations received...")
 
-        # self.get_logger().info(f"Initialized goal pose {self.banana1}, px {self.convert_world_to_pixel(self.banana1)}")
-        # if not banana_locations:
-        #     self.get_logger().info("No banana locations received...")
+        self.banana1 = (banana_locations[0].position.x, banana_locations[0].position.y)
+        self.get_logger().info(f"Initialized banana 1 {self.banana1}, px {self.convert_world_to_pixel(self.banana1)}")
 
-        # self.banana1 = (banana_locations[0].position.x, banana_locations[0].position.y)
-        # self.get_logger().info(f"Initialized banana 1 {self.banana1}, px {self.convert_world_to_pixel(self.banana1)}")
-
-        # self.banana2 = (banana_locations[1].position.x, banana_locations[1].position.y)
-        # self.get_logger().info(f"Initialized banana 2 {self.banana2}, px {self.convert_world_to_pixel(self.banana2)}")
+        self.banana2 = (banana_locations[1].position.x, banana_locations[1].position.y)
+        self.get_logger().info(f"Initialized banana 2 {self.banana2}, px {self.convert_world_to_pixel(self.banana2)}")
 
     def plan_path(self, start_point, end_point, map):
         self.get_logger().info("Path planning started")
@@ -291,7 +183,7 @@ class PathPlan(Node):
             ]
             return [
                 (u, v) for u, v in neighbors
-                if 0 <= u <= self.map_width and 0 <= v <= self.map_height
+                if 0 <= u < self.map_width and 0 <= v < self.map_height
             ]
         def heuristic(a, b):
             # manhattan distance for heuristic
@@ -307,7 +199,7 @@ class PathPlan(Node):
         # self.get_logger().info(f"open set {open_set}")
         while open_set:
             _, current_g, current = heappop(open_set)
-            # self.get_logger().info(f"On node {current}")
+            self.get_logger().info(f"On node {current}")
 
             if self.visualize_search:
                 # Add the current node to visited points
@@ -330,19 +222,15 @@ class PathPlan(Node):
             # self.get_logger().info(f"{get_neighbors(current)}")
             for neighbor in get_neighbors(current):
                 u, v = neighbor
-                # self.get_logger().info(f"safety map value {self.safety_cost_map[v,u]}")
                 if neighbor in completed or self.map_data[v,u] != 0:
                     # self.get_logger().info(f"{self.map_data[v,u]}")
-                    # self.get_logger().info(f"safety map value {self.safety_cost_map[v,u]}")
                     continue
 
-                tentative_g_score = current_g + self.euclidean_distance(current, neighbor) + self.safety_cost_map[v,u]
+                tentative_g_score = current_g + self.euclidean_distance(current, neighbor)
 
                 if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
                     g_score[neighbor] = tentative_g_score
-                    # safety_cost = self.safety_cost_map[v,u]
-                    f_score = tentative_g_score + self.euclidean_distance(neighbor, goal_px) # + safety cost# change between euclidean &amp; heuristic
-                    # f_score = tentative_g_score + heuristic(neighbor, goal_px)
+                    f_score = tentative_g_score + heuristic(neighbor, goal_px) # change between euclidean & heuristic
                     heapq.heappush(open_set, (f_score, tentative_g_score, neighbor))
                     came_from[neighbor] = current
 
@@ -359,7 +247,7 @@ class PathPlan(Node):
     def reconstruct_path(self, came_from, end):
         current = end
         path = [self.convert_pixel_to_world(current)]
-        # self.get_logger().info(f"{came_from}")
+        self.get_logger().info(f"{came_from}")
 
         while current in came_from:
             current = came_from[current]
@@ -380,7 +268,6 @@ class PathPlan(Node):
         scaled_map[dilated_map != 0] = 100
 
         self.map_data = scaled_map
-        self.map_data[:, 1301:] = 100 # dont use right
 
     def convert_pixel_to_world(self, pixel):
         pixel_coords = np.array([pixel[0], pixel[1]])
@@ -400,27 +287,6 @@ class PathPlan(Node):
     def euclidean_distance(self, a, b):
         # euclidean distance for cost
         return np.sqrt((a[0] - b[0])**2 + (a[1] - b[1])**2)
-
-    def calculate_safety_cost_map(self, maxdist=8):
-        """
-        Calculate a safety cost map where cost increases as distance to the nearest obstacle decreases.
-        """
-        safety_cost_map = np.zeros_like(self.map_data, dtype=np.float32)
-
-        # obstacles 1 free space 0
-        binary_map = np.zeros_like(self.map_data, dtype=np.uint8)
-        binary_map[self.map_data != 0] = 1
-
-        # distance transform
-        distance_map = cv2.distanceTransform(1 - binary_map, cv2.DIST_L2, 5)
-        # self.get_logger().info(f"{distance_map}")
-        # safety costs
-        # safety_cost_map = (maxdist - distance_map)
-        safety_cost_map = (1*(maxdist - distance_map))**2
-        # clip negative values
-        # safety_cost_map[safety_cost_map < 0] = 0
-        self.safety_cost_map = safety_cost_map
-        self.get_logger().info("Safety cost map calculated.")
 
 def main(args=None):
     rclpy.init(args=args)

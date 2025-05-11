@@ -39,15 +39,15 @@ def cd_color_segmentation(img, template):
 	hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 	# image_print(hsv)
 
-	lower_orange = np.array([0, 240, 235]) #0, 220, 102
-	upper_orange = np.array([30, 255, 255]) #45, 255, 255
+	lower_orange = np.array([0, 240, 235]) 
+	upper_orange = np.array([15, 255, 255]) 
 
 	mask = cv2.inRange(hsv, lower_orange, upper_orange)
 	# image_print(mask)
 
-	kernel = np.ones((5, 5), np.uint8)
+	# kernel = np.ones((5, 5), np.uint8)
 	# mask = cv2.erode(mask, kernel, iterations=2)
-	mask = cv2.dilate(mask, kernel, iterations=1)
+	# mask = cv2.dilate(mask, kernel, iterations=1)
 	# mask = cv2.erode(mask, kernel, iterations=1)
 	# image_print(mask)
     # Find external contours in the mask.
@@ -59,15 +59,13 @@ def cd_color_segmentation(img, template):
 		x, y, w, h = cv2.boundingRect(largest_contour)
 		bounding_box = ((x, y), (x + w, y + h))
 		cv2.rectangle(img, (x,y), (x+w,y+h), (0,0,255), 2)
+		return bounding_box, True
 		# image_print(img)
 	else:
 		bounding_box = ((0, 0), (0, 0))
-
+		return bounding_box, False
 
 	########### YOUR CODE ENDS HERE ###########
-
-	# Return bounding box
-	return bounding_box
 
 
 
