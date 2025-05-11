@@ -6,6 +6,7 @@ import numpy as np
 
 from vs_msgs.msg import ConeLocation, ParkingError
 from ackermann_msgs.msg import AckermannDriveStamped
+from std_msgs.msg import Bool
 
 class ParkingController(Node):
     """
@@ -21,12 +22,12 @@ class ParkingController(Node):
 
         self.drive_pub = self.create_publisher(AckermannDriveStamped, DRIVE_TOPIC, 10)
         self.error_pub = self.create_publisher(ParkingError, "/parking_error", 10)
-
+        self.create_subscription(Bool, "/edge_case_detector", self.edge_case_callback, 1)
         self.create_subscription(ConeLocation, "/relative_cone",
             self.relative_cone_callback, 1)
 
-        self.parking_distance = .75 # meters; try playing with this number!
-        self.look_ahead = 0.5
+        self.parking_distance = .5 # meters; try playing with this number!
+        self.look_ahead = 1.3 #1.1 -> 1/4
         self.relative_x = 0
         self.relative_y = 0
         self.wheelbase = 0.34
@@ -34,6 +35,8 @@ class ParkingController(Node):
         self.waypoints = None
         self.moving_backward = False
         self.backward_count = 0
+        self.edge_case = False
+        self.steer_angle = 0.0
 
         self.get_logger().info("Parking Controller Initialized")
 
@@ -64,33 +67,45 @@ class ParkingController(Node):
 
         if self.moving_backward is False:
             if error_distance > 0.1:
-                velo = 0.5
-                steer_angle = np.arctan2(2*np.sin(alpha)*L, look_ahead)
+                velo = 4.0 # change to 0.5/4
+                self.steer_angle = np.arctan2(2*np.sin(alpha)*L, look_ahead)
             else:
                 if np.abs(np.arctan2(self.relative_y, self.relative_x)) > .175: #10 degrees
                     self.moving_backward = True
                 velo = 0.0
-                steer_angle = 0.0
-        else:
-            velo = -0.5
-            self.backward_count += 1
-            if self.backward_count <= 5:
-                steer_angle = -1*np.sign(way_x)* (0.35) #desired angle in radians
-                self.get_logger().info(f"steering angle backward: {steer_angle}")
-            elif self.backward_count == 10:
-                self.get_logger().info(f"count: {self.backward_count}")
-                self.moving_backward = False
-                self.backward_count = 0
-            steer_angle = 0.0
-
-
-
+                self.steer_angle = 0.0
+        # else:
+        #     velo = -0.5
+        #     self.backward_count += 1
+        #     if self.backward_count <= 5:
+        #         steer_angle = -1*np.sign(way_x)* (0.35) #desired angle in radians
+        #         # self.get_logger().info(f"steering angle backward: {steer_angle}")
+        #     elif self.backward_count == 10:
+        #         # self.get_logger().info(f"count: {self.backward_count}")
+        #         self.moving_backward = False
+        #         self.backward_count = 0
+        #     steer_angle = 0.0
+        clipping_angle = 2.0 # 2.2
+        velo = 6.0
+        # 8 for 2 m/s
+        if not self.edge_case:
+            if self.steer_angle > np.deg2rad(clipping_angle):
+                # self.get_logger().info(f"Clipped {np.deg2rad(steer_angle)} to {np.deg2rad(20)}")
+                self.steer_angle = np.deg2rad(clipping_angle)
+            if self.steer_angle <= np.deg2rad(0.001) and self.steer_angle >= np.deg2rad(0.001):
+                # self.get_logger().info(f"clipped {steer_angle} to {np.deg2rad(0.001)}")
+                self.steer_angle = np.deg2rad(0.001)
+            if self.steer_angle <= np.deg2rad(-clipping_angle):
+                # self.get_logger().info(f"Clipped {np.deg2rad(steer_angle)} to {np.deg2rad(-20)}")
+                self.steer_angle = np.deg2rad(-clipping_angle)
+        # else:
+            # self.steer_angle = -self.steer_angle
 
 
         drive_cmd.header.stamp = self.get_clock().now().to_msg()
         drive_cmd.header.frame_id = "base_link"
 
-        drive_cmd.drive.steering_angle = steer_angle
+        drive_cmd.drive.steering_angle = self.steer_angle
         drive_cmd.drive.steering_angle_velocity = 0.0
         drive_cmd.drive.speed = velo
         drive_cmd.drive.acceleration = 0.
@@ -125,6 +140,9 @@ class ParkingController(Node):
         #################################
 
         self.error_pub.publish(error_msg)
+
+    def edge_case_callback(self, msg):
+        self.edge_case = msg.data
 
 def main(args=None):
     rclpy.init(args=args)
